@@ -1,5 +1,5 @@
 # bitFlyerScalpingBot.py
-# coding: utf-8
+# -*- coding: utf-8 -*-
 
 from pubnub.callbacks import SubscribeCallback
 from pubnub.enums import PNStatusCategory
@@ -31,42 +31,49 @@ df_all = pd.DataFrame(index=['datetime'],
 # 初期ポジションを取得
 bf_positions = pd.DataFrame(api.getpositions(product_code = "FX_BTC_JPY"))
 local_pos = 'NonePos'
+local_pos_price = 0
 if not(bf_positions.empty):
-    bf_positions = bf_positions['side'].values.flatten()
-    if bf_positions == 'BUY': local_pos = 'BuyPos'
-    elif bf_positions == 'SELL': local_pos = 'SellPos'
+    bf_pos = bf_positions['side'].values.flatten()
+    bf_pos_price = int(bf_positions['price'].values.flatten())
+    if bf_pos == 'BUY': local_pos = 'BuyPos'
+    elif bf_pos == 'SELL': local_pos = 'SellPos'
+    local_pos_price = bf_pos_price
+sum_profit = 0
 
-
-
-# 20秒間の約定履歴を保管して売買volumeを返す
-def store_executions(channel, message):
+# xx秒間の約定履歴を保管して売買volumeを返す
+def store_executions(channel, message, store_time_sec):
     for i in message:
         df_new = pd.DataFrame(message)
-        df_new['exec_date'] = pd.to_datetime(df_new['exec_date'])
+        df_new['exec_date'] = pd.to_datetime(df_new['exec_date']) + timedelta(hours=9)
 
     global df_all
+
     df_all = df_all.append(df_new)
     df_all.index = df_all['exec_date']
 
     date_now = df_all.index[len(df_all)-1]
-    df_lim = df_all.ix[df_all.index >= (date_now - timedelta(seconds=20))]
+    df_all = df_all.ix[df_all.index >= (date_now - timedelta(seconds = store_time_sec))]
 
-    buy_vol = df_lim[df_lim.apply(lambda x: x['side'], axis=1) == "BUY"]['size'].sum(axis=0)
-    sell_vol = df_lim[df_lim.apply(lambda x: x['side'], axis=1) == "SELL"]['size'].sum(axis=0)
-    ex_price = int(df_lim.ix[[len(df_lim)-1],['price']].values.flatten())
+    buy_vol = df_all[df_all.apply(lambda x: x['side'], axis=1) == "BUY"]['size'].sum(axis=0)
+    sell_vol = df_all[df_all.apply(lambda x: x['side'], axis=1) == "SELL"]['size'].sum(axis=0)
+    ex_price = int(df_all.ix[[len(df_all)-1],['price']].values.flatten())
 
-    return df_lim, buy_vol, sell_vol, ex_price
+    return df_all, buy_vol, sell_vol, ex_price
 
 
 # pubnub message受信毎に行う処理
 def task(channel, message):
-    df_lim, buy_vol, sell_vol, ex_price = store_executions(channel, message)
-
     global local_pos
+    global local_pos_price
+    global sum_profit
     
     # 注文パラメーター
-    order_margin = 10
+    order_margin = 20
     order_size = 0.001
+    store_time_sec = 20
+
+    # xx秒間の約定履歴から売買volumeを取得
+    df, buy_vol, sell_vol, ex_price = store_executions(channel, message, store_time_sec)
     
     # 買い優勢
     if buy_vol > sell_vol:
@@ -75,21 +82,30 @@ def task(channel, message):
             # 最終オーダーのポジション、価格を取得
             bf_positions = pd.DataFrame(api.getpositions(product_code = "FX_BTC_JPY"))
             if not(bf_positions.empty):
-                last_position = bf_positions['side'].values.flatten()
-                last_price = int(bf_positions['price'].values.flatten())
-                if last_position == 'SELL':
-                    # 現在の中間価格を取得
-                    mid_price = public_api.board(product_code = "FX_BTC_JPY")["mid_price"]
-                    print("[Close Short position]", "profit:", -(mid_price - last_price)*order_size)
+                bf_pos = bf_positions['side'].values.flatten()
+                bf_pos_price = int(bf_positions['price'].values.flatten())
+                # 売りポジション確認
+                if bf_pos == 'SELL':
+                    # 決済
+                    print("[Close Short position]")
                     callback = api.sendchildorder(product_code = "FX_BTC_JPY", child_order_type = "MARKET", side = "BUY", size = order_size)
                     print(callback)
-                    if not(callback.get('status')): local_pos = 'NonePos'
+                    # 決済確認
+                    if not(callback.get('status')):
+                        local_pos = 'NonePos'
+                        ordered_profit = -(ex_price - bf_pos_price)*order_size
+                        sum_profit = sum_profit + ordered_profit
+                        print("order complete!", "profit:", ordered_profit)
+
         # ロングエントリー
         if local_pos == 'NonePos' and (buy_vol - sell_vol) > order_margin:
             print("[Long Entry]")
             callback = api.sendchildorder(product_code = "FX_BTC_JPY", child_order_type = "MARKET", side = "BUY", size = order_size)
             print(callback)
-            if not(callback.get('status')): local_pos = 'BuyPos'
+            if not(callback.get('status')):
+                local_pos = 'BuyPos'
+                local_pos_price = ex_price
+                print("order complete!")
     
     # 売り優勢
     if sell_vol > buy_vol:
@@ -98,27 +114,45 @@ def task(channel, message):
             # 最終オーダーのポジション、価格を取得
             bf_positions = pd.DataFrame(api.getpositions(product_code = "FX_BTC_JPY"))
             if not(bf_positions.empty):
-                last_position = bf_positions['side'].values.flatten()
-                last_price = int(bf_positions['price'].values.flatten())
-                if last_position == 'BUY':
-                    # 現在の中間価格を取得
-                    mid_price = public_api.board(product_code = "FX_BTC_JPY")["mid_price"]
-                    print("[Close Long position]", "profit:", (mid_price - last_price)*order_size)
+                bf_pos = bf_positions['side'].values.flatten()
+                bf_pos_price = int(bf_positions['price'].values.flatten())
+                # 買いポジション確認
+                if bf_pos == 'BUY':
+                    # 決済
+                    print("[Close Long position]")
                     callback = api.sendchildorder(product_code = "FX_BTC_JPY", child_order_type = "MARKET", side = "SELL", size = order_size)
                     print(callback)
-                    if not(callback.get('status')): local_pos = 'NonePos'
+                    # 決済確認
+                    if not(callback.get('status')):
+                        local_pos = 'NonePos'
+                        ordered_profit = (ex_price - bf_pos_price)*order_size
+                        sum_profit = sum_profit + ordered_profit
+                        print("order complete!", "profit:", ordered_profit)
         # ショートエントリー
         if local_pos == 'NonePos' and (sell_vol - buy_vol) > order_margin:
             print("[Short Entry]")
             callback = api.sendchildorder(product_code = "FX_BTC_JPY", child_order_type = "MARKET",side = "SELL", size = order_size)
             print(callback)
-            if not(callback.get('status')): local_pos = 'SellPos'
-    
-    print(df_lim.index[len(df_lim)-1].strftime('%H:%M:%S'),
+            if not(callback.get('status')):
+                local_pos = 'SellPos'
+                local_pos_price = ex_price
+                print("order complete!")
+
+    # 現在のポジションの損益算出
+    order_profit = 0
+    if local_pos == 'BuyPos':
+        order_profit = (ex_price - local_pos_price)*order_size
+    elif local_pos == 'SellPos':
+        order_profit = -(ex_price - local_pos_price)*order_size
+
+    # summary
+    print(df.index[len(df)-1].strftime('%H:%M:%S'),
           "BUY_VOL", format(buy_vol, '.2f'),
           "SELL_VOL", format(sell_vol, '.2f'),
           "price", ex_price,
-          "pos", local_pos)
+          "pos", local_pos,
+          "pos_profit", format(order_profit, '.2f'),
+          "sum_profit", format(sum_profit, '.2f'))
 
 
 
