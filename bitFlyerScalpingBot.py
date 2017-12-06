@@ -111,7 +111,7 @@ def received_message_task(channel, message):
 
     df, buy_vol, sell_vol, ex_price = store_executions(channel, message, store_time_sec)
     
-    # strong buy volumer
+    # strong buy volume
     if buy_vol > sell_vol:
         # sell close
         if local_pos == 'SELL':
