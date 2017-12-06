@@ -69,7 +69,7 @@ def task(channel, message):
     
     # 注文パラメーター
     order_margin = 10
-    order_size = 0.007
+    order_size = 0.001
     store_time_sec = 20
 
     # xx秒間の約定履歴から売買volumeを取得
@@ -96,9 +96,8 @@ def task(channel, message):
                         ordered_profit = -(ex_price - bf_pos_price)*order_size
                         sum_profit = sum_profit + ordered_profit
                         print("order complete!", "profit:", ordered_profit)
-
         # ロングエントリー
-        if local_pos == 'NonePos' and (buy_vol - sell_vol) > order_margin:
+        if (local_pos == 'NonePos') and ((buy_vol - sell_vol) > order_margin):
             print("[Long Entry]")
             callback = api.sendchildorder(product_code = "FX_BTC_JPY", child_order_type = "MARKET", side = "BUY", size = order_size)
             print(callback)
@@ -108,7 +107,7 @@ def task(channel, message):
                 print("order complete!")
     
     # 売り優勢
-    if sell_vol > buy_vol:
+    elif sell_vol > buy_vol:
         # ロング決済注文
         if local_pos == 'BuyPos':
             # 最終オーダーのポジション、価格を取得
@@ -129,7 +128,7 @@ def task(channel, message):
                         sum_profit = sum_profit + ordered_profit
                         print("order complete!", "profit:", ordered_profit)
         # ショートエントリー
-        if local_pos == 'NonePos' and (sell_vol - buy_vol) > order_margin:
+        if (local_pos == 'NonePos') and ((sell_vol - buy_vol) > order_margin):
             print("[Short Entry]")
             callback = api.sendchildorder(product_code = "FX_BTC_JPY", child_order_type = "MARKET",side = "SELL", size = order_size)
             print(callback)
@@ -147,12 +146,10 @@ def task(channel, message):
 
     # summary
     print(df.index[len(df)-1].strftime('%H:%M:%S'),
-          "BUY_VOL", format(buy_vol, '.2f'),
-          "SELL_VOL", format(sell_vol, '.2f'),
+          "BUY/SELL", format(buy_vol, '.2f'), format(sell_vol, '.2f'),
           "price", ex_price,
-          "pos", local_pos,
-          "pos_profit", format(order_profit, '.2f'),
-          "sum_profit", format(sum_profit, '.2f'))
+          local_pos, format(order_profit, '.2f'),
+          "smpf", format(sum_profit, '.2f'))
 
 
 
@@ -187,7 +184,10 @@ def main(channels):
 
         def message(self, pubnub, message):
             # Handle new message stored in message.message
-            task(message.channel, message.message)
+            try:
+                task(message.channel, message.message)
+            except:
+                print('TASK_ERROR: Could not do task.')
 
     listener = BitflyerSubscriberCallback()
     pubnub.add_listener(listener)
