@@ -33,8 +33,8 @@ bf_positions = pd.DataFrame(api.getpositions(product_code = "FX_BTC_JPY"))
 local_pos = 'NonePos'
 local_pos_price = 0
 if not(bf_positions.empty):
-    bf_pos = bf_positions['side'].values.flatten()
-    bf_pos_price = int(bf_positions['price'].values.flatten())
+    bf_pos = bf_positions.ix[[0],['side']].values.flatten()
+    bf_pos_price = int(bf_positions.ix[[0],['price']].values.flatten())
     if bf_pos == 'BUY': local_pos = 'BuyPos'
     elif bf_pos == 'SELL': local_pos = 'SellPos'
     local_pos_price = bf_pos_price
@@ -68,8 +68,8 @@ def task(channel, message):
     global sum_profit
     
     # 注文パラメーター
-    order_margin = 20
-    order_size = 0.001
+    order_margin = 10
+    order_size = 0.007
     store_time_sec = 20
 
     # xx秒間の約定履歴から売買volumeを取得
@@ -82,8 +82,8 @@ def task(channel, message):
             # 最終オーダーのポジション、価格を取得
             bf_positions = pd.DataFrame(api.getpositions(product_code = "FX_BTC_JPY"))
             if not(bf_positions.empty):
-                bf_pos = bf_positions['side'].values.flatten()
-                bf_pos_price = int(bf_positions['price'].values.flatten())
+                bf_pos = bf_positions.ix[[0],['side']].values.flatten()
+                bf_pos_price = int(bf_positions.ix[[0],['price']].values.flatten())
                 # 売りポジション確認
                 if bf_pos == 'SELL':
                     # 決済
@@ -114,8 +114,8 @@ def task(channel, message):
             # 最終オーダーのポジション、価格を取得
             bf_positions = pd.DataFrame(api.getpositions(product_code = "FX_BTC_JPY"))
             if not(bf_positions.empty):
-                bf_pos = bf_positions['side'].values.flatten()
-                bf_pos_price = int(bf_positions['price'].values.flatten())
+                bf_pos = bf_positions.ix[[0],['side']].values.flatten()
+                bf_pos_price = int(bf_positions.ix[[0],['price']].values.flatten())
                 # 買いポジション確認
                 if bf_pos == 'BUY':
                     # 決済
