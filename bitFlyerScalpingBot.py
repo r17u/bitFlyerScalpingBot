@@ -13,12 +13,12 @@ import pybitflyer
 import json
 
 
-# bitFlyer API 設定
+# bitFlyer API setting
 public_api = pybitflyer.API()
 bitFlyer_keys = json.load(open('bitFlyer_keys.json', 'r'))
-api = pybitflyer.API(api_key = bitFlyer_keys["key"], api_secret = bitFlyer_keys["secret"])
+api = pybitflyer.API(api_key=bitFlyer_keys['key'], api_secret=bitFlyer_keys['secret'])
 
-# 約定履歴保管df
+# dataframe for executions
 df_all = pd.DataFrame(index=['datetime'],
                     columns=['id', 
                             'side', 
@@ -28,19 +28,17 @@ df_all = pd.DataFrame(index=['datetime'],
                             'buy_child_order_acceptance_id', 
                             'sell_child_order_acceptance_id'])
 
-# 初期ポジションを取得
-bf_positions = pd.DataFrame(api.getpositions(product_code = "FX_BTC_JPY"))
-local_pos = 'NonePos'
+# get initial bitFlyer positions
+bf_positions = pd.DataFrame(api.getpositions(product_code='FX_BTC_JPY'))
+local_pos = 'NONE'
 local_pos_price = 0
 if not(bf_positions.empty):
-    bf_pos = bf_positions.ix[[0],['side']].values.flatten()
-    bf_pos_price = int(bf_positions.ix[[0],['price']].values.flatten())
-    if bf_pos == 'BUY': local_pos = 'BuyPos'
-    elif bf_pos == 'SELL': local_pos = 'SellPos'
-    local_pos_price = bf_pos_price
+    local_pos = bf_positions.ix[[0], ['side']].values.flatten()
+    local_pos_price = int(bf_positions.ix[[0], ['price']].values.flatten())
 sum_profit = 0
 
-# xx秒間の約定履歴を保管して売買volumeを返す
+
+# calc buy and sell volume from lightning_executions_FX_BTC_JPY message
 def store_executions(channel, message, store_time_sec):
     for i in message:
         df_new = pd.DataFrame(message)
@@ -51,143 +49,133 @@ def store_executions(channel, message, store_time_sec):
     df_all = df_all.append(df_new)
     df_all.index = df_all['exec_date']
 
-    date_now = df_all.index[len(df_all)-1]
-    df_all = df_all.ix[df_all.index >= (date_now - timedelta(seconds = store_time_sec))]
+    date_now = df_all.index[len(df_all) - 1]
+    df_all = df_all.ix[df_all.index >= (date_now - timedelta(seconds=store_time_sec))]
 
-    buy_vol = df_all[df_all.apply(lambda x: x['side'], axis=1) == "BUY"]['size'].sum(axis=0)
-    sell_vol = df_all[df_all.apply(lambda x: x['side'], axis=1) == "SELL"]['size'].sum(axis=0)
-    ex_price = int(df_all.ix[[len(df_all)-1],['price']].values.flatten())
+    buy_vol = df_all[df_all.apply(lambda x: x['side'], axis=1) == 'BUY']['size'].sum(axis=0)
+    sell_vol = df_all[df_all.apply(lambda x: x['side'], axis=1) == 'SELL']['size'].sum(axis=0)
+    ex_price = int(df_all.ix[[len(df_all) - 1], ['price']].values.flatten())
 
     return df_all, buy_vol, sell_vol, ex_price
 
 
-# pubnub message受信毎に行う処理
-def task(channel, message):
+# close buy or sell position
+def close(side, order_size, ex_price):
+    oposit_side = 'NONE'
+    if side == 'BUY':
+        oposit_side = 'SELL'
+    elif side == 'SELL':
+        oposit_side = 'BUY'
+
+    bf_positions = pd.DataFrame(api.getpositions(product_code='FX_BTC_JPY'))
+    if not(bf_positions.empty):
+        bf_pos = bf_positions.ix[[0], ['side']].values.flatten()
+        bf_pos_price = int(bf_positions.ix[[0], ['price']].values.flatten())
+        if bf_pos == side:
+            print('[' + side + ' Close]')
+            callback = api.sendchildorder(product_code='FX_BTC_JPY', child_order_type='MARKET', side=oposit_side, size=order_size)
+            print(callback)
+            if not(callback.get('status')):
+                ordered_profit = 0
+                if side == 'BUY':
+                    ordered_profit = (ex_price - bf_pos_price) * order_size
+                elif side == 'SELL':
+                    ordered_profit = -(ex_price - bf_pos_price) * order_size
+                print('Order Complete!', 'profit:', ordered_profit)
+                return 'NONE', ordered_profit
+    else:
+        return side, 0
+
+
+# entry buy or sell position
+def entry(side, order_size):
+    print('[' + side + ' Entry]')
+    callback = api.sendchildorder(product_code='FX_BTC_JPY', child_order_type='MARKET', side=side, size=order_size)
+    print(callback)
+    if not(callback.get('status')):
+        print('Order Complete!')
+        return side
+    else:
+        return 'NONE'
+
+
+def received_message_task(channel, message):
     global local_pos
     global local_pos_price
     global sum_profit
     
-    # 注文パラメーター
+    # order parameter
     order_margin = 10
     order_size = 0.001
     store_time_sec = 20
 
-    # xx秒間の約定履歴から売買volumeを取得
     df, buy_vol, sell_vol, ex_price = store_executions(channel, message, store_time_sec)
     
-    # 買い優勢
+    # strong buy volumer
     if buy_vol > sell_vol:
-        # ショート決済注文
-        if local_pos == 'SellPos':
-            # 最終オーダーのポジション、価格を取得
-            bf_positions = pd.DataFrame(api.getpositions(product_code = "FX_BTC_JPY"))
-            if not(bf_positions.empty):
-                bf_pos = bf_positions.ix[[0],['side']].values.flatten()
-                bf_pos_price = int(bf_positions.ix[[0],['price']].values.flatten())
-                # 売りポジション確認
-                if bf_pos == 'SELL':
-                    # 決済
-                    print("[Close Short position]")
-                    callback = api.sendchildorder(product_code = "FX_BTC_JPY", child_order_type = "MARKET", side = "BUY", size = order_size)
-                    print(callback)
-                    # 決済確認
-                    if not(callback.get('status')):
-                        local_pos = 'NonePos'
-                        ordered_profit = -(ex_price - bf_pos_price)*order_size
-                        sum_profit = sum_profit + ordered_profit
-                        print("order complete!", "profit:", ordered_profit)
-        # ロングエントリー
-        if (local_pos == 'NonePos') and ((buy_vol - sell_vol) > order_margin):
-            print("[Long Entry]")
-            callback = api.sendchildorder(product_code = "FX_BTC_JPY", child_order_type = "MARKET", side = "BUY", size = order_size)
-            print(callback)
-            if not(callback.get('status')):
-                local_pos = 'BuyPos'
+        # sell close
+        if local_pos == 'SELL':
+            local_pos, ordered_profit = close('SELL', order_size, ex_price)
+            sum_profit = sum_profit + ordered_profit
+        # buy entry
+        if (local_pos == 'NONE') and ((buy_vol - sell_vol) > order_margin):
+            local_pos = entry('BUY', order_size)
+            if local_pos == 'BUY':
                 local_pos_price = ex_price
-                print("order complete!")
     
-    # 売り優勢
+    # strong sell volume
     elif sell_vol > buy_vol:
-        # ロング決済注文
-        if local_pos == 'BuyPos':
-            # 最終オーダーのポジション、価格を取得
-            bf_positions = pd.DataFrame(api.getpositions(product_code = "FX_BTC_JPY"))
-            if not(bf_positions.empty):
-                bf_pos = bf_positions.ix[[0],['side']].values.flatten()
-                bf_pos_price = int(bf_positions.ix[[0],['price']].values.flatten())
-                # 買いポジション確認
-                if bf_pos == 'BUY':
-                    # 決済
-                    print("[Close Long position]")
-                    callback = api.sendchildorder(product_code = "FX_BTC_JPY", child_order_type = "MARKET", side = "SELL", size = order_size)
-                    print(callback)
-                    # 決済確認
-                    if not(callback.get('status')):
-                        local_pos = 'NonePos'
-                        ordered_profit = (ex_price - bf_pos_price)*order_size
-                        sum_profit = sum_profit + ordered_profit
-                        print("order complete!", "profit:", ordered_profit)
-        # ショートエントリー
-        if (local_pos == 'NonePos') and ((sell_vol - buy_vol) > order_margin):
-            print("[Short Entry]")
-            callback = api.sendchildorder(product_code = "FX_BTC_JPY", child_order_type = "MARKET",side = "SELL", size = order_size)
-            print(callback)
-            if not(callback.get('status')):
-                local_pos = 'SellPos'
+        # buy close
+        if local_pos == 'BUY':
+            local_pos, ordered_profit = close('BUY', order_size, ex_price)
+            sum_profit = sum_profit + ordered_profit
+        # sell entry
+        if (local_pos == 'NONE') and ((sell_vol - buy_vol) > order_margin):
+            local_pos = entry('SELL', order_size)
+            if local_pos == 'SELL':
                 local_pos_price = ex_price
-                print("order complete!")
 
-    # 現在のポジションの損益算出
+    # calc profit
     order_profit = 0
-    if local_pos == 'BuyPos':
-        order_profit = (ex_price - local_pos_price)*order_size
-    elif local_pos == 'SellPos':
-        order_profit = -(ex_price - local_pos_price)*order_size
+    if local_pos == 'BUY':
+        order_profit = (ex_price - local_pos_price) * order_size
+    elif local_pos == 'SELL':
+        order_profit = -(ex_price - local_pos_price) * order_size
 
     # summary
-    print(df.index[len(df)-1].strftime('%H:%M:%S'),
-          "BUY/SELL", format(buy_vol, '.2f'), format(sell_vol, '.2f'),
-          "price", ex_price,
+    print(df.index[len(df) - 1].strftime('%H:%M:%S'),
+          'BUY/SELL', format(buy_vol, '.2f'), format(sell_vol, '.2f'),
+          'PRICE', ex_price,
           local_pos, format(order_profit, '.2f'),
-          "smpf", format(sum_profit, '.2f'))
+          'SMPF', format(sum_profit, '.2f'))
 
 
 
-# pubnub 受信処理
 config = PNConfiguration()
 config.subscribe_key = 'sub-c-52a9ab50-291b-11e5-baaa-0619f8945a4f'
 config.reconnect_policy = PNReconnectionPolicy.LINEAR
 pubnub = PubNubTornado(config)
-@gen.coroutine #非同期処理
+
+# pubnub receive
+@gen.coroutine
 def main(channels):
     class BitflyerSubscriberCallback(SubscribeCallback):
         def presence(self, pubnub, presence):
-            pass  # handle incoming presence data
-
+            pass
         def status(self, pubnub, status):
             if status.category == PNStatusCategory.PNUnexpectedDisconnectCategory:
-                pass  # This event happens when radio / connectivity is lost
-
+                pass
             elif status.category == PNStatusCategory.PNConnectedCategory:
-                # Connect event. You can do stuff like publish, and know you'll get it.
-                # Or just use the connected event to confirm you are subscribed for
-                # UI / internal notifications, etc
                 pass
             elif status.category == PNStatusCategory.PNReconnectedCategory:
                 pass
-                # Happens as part of our regular operation. This event happens when
-                # radio / connectivity is lost, then regained.
             elif status.category == PNStatusCategory.PNDecryptionErrorCategory:
                 pass
-                # Handle message decryption error. Probably client configured to
-                # encrypt messages and on live data feed it received plain text.
-
         def message(self, pubnub, message):
-            # Handle new message stored in message.message
             try:
-                task(message.channel, message.message)
+                received_message_task(message.channel, message.message)
             except:
-                print('TASK_ERROR: Could not do task.')
+                print('Could not do received_message_task.')
 
     listener = BitflyerSubscriberCallback()
     pubnub.add_listener(listener)
