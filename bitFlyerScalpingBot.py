@@ -1,5 +1,5 @@
 # bitFlyerScalpingBot.py
-# coding: utf-8
+# -*- coding: utf-8 -*-
 
 from pubnub.callbacks import SubscribeCallback
 from pubnub.enums import PNStatusCategory
