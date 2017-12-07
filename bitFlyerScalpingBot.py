@@ -185,6 +185,5 @@ def main(channels):
 
 
 if __name__ == '__main__':
-    main(['lightning_executions_FX_BTC_JPY'],
-         )
+    main(['lightning_executions_FX_BTC_JPY'])
     pubnub.start()
