@@ -81,7 +81,7 @@ def close(side, order_size, ex_price):
                     ordered_profit = (ex_price - bf_pos_price) * order_size
                 elif side == 'SELL':
                     ordered_profit = -(ex_price - bf_pos_price) * order_size
-                print('Order Complete!', 'profit:', ordered_profit)
+                print('Order Complete!', 'ex_price:', ex_price, 'pos_price:', bf_pos_price, 'profit:', format(ordered_profit, '.2f'))
                 return 'NONE', ordered_profit
     else:
         return side, 0
@@ -103,51 +103,53 @@ def received_message_task(channel, message):
     global local_pos
     global local_pos_price
     global sum_profit
-    
+
     # order parameter
-    order_margin = 10
-    order_size = 0.001
     store_time_sec = 20
+    order_size = 0.001
+    volume_triger = 60
 
     df, buy_vol, sell_vol, ex_price = store_executions(channel, message, store_time_sec)
-    
-    # strong buy volume
-    if buy_vol > sell_vol:
-        # sell close
-        if local_pos == 'SELL':
-            local_pos, ordered_profit = close('SELL', order_size, ex_price)
-            sum_profit = sum_profit + ordered_profit
-        # buy entry
-        if (local_pos == 'NONE') and ((buy_vol - sell_vol) > order_margin):
-            local_pos = entry('BUY', order_size)
-            if local_pos == 'BUY':
-                local_pos_price = ex_price
-    
-    # strong sell volume
-    elif sell_vol > buy_vol:
-        # buy close
-        if local_pos == 'BUY':
-            local_pos, ordered_profit = close('BUY', order_size, ex_price)
-            sum_profit = sum_profit + ordered_profit
-        # sell entry
-        if (local_pos == 'NONE') and ((sell_vol - buy_vol) > order_margin):
-            local_pos = entry('SELL', order_size)
-            if local_pos == 'SELL':
-                local_pos_price = ex_price
 
-    # calc profit
+    # calc profit and profit_rate
     order_profit = 0
     if local_pos == 'BUY':
         order_profit = (ex_price - local_pos_price) * order_size
     elif local_pos == 'SELL':
         order_profit = -(ex_price - local_pos_price) * order_size
+    order_profit_rate = order_profit / (ex_price * order_size)
+
+    # buy or sell close
+    if (local_pos == 'BUY') and (buy_vol < sell_vol):
+        local_pos, ordered_profit = close('BUY', order_size, ex_price)
+        sum_profit = sum_profit + ordered_profit
+    elif (local_pos == 'SELL') and (buy_vol > sell_vol):
+        local_pos, ordered_profit = close('SELL', order_size, ex_price)
+        sum_profit = sum_profit + ordered_profit
+
+    # buy or sell entry
+    if (local_pos == 'NONE'):
+        if ((buy_vol - sell_vol) > volume_triger):
+            local_pos = entry('BUY', order_size)
+            if local_pos == 'BUY':
+                local_pos_price = ex_price
+        elif (-(buy_vol - sell_vol) > volume_triger):
+            local_pos = entry('SELL', order_size)
+            if local_pos == 'SELL':
+                local_pos_price = ex_price
 
     # summary
     print(df.index[len(df) - 1].strftime('%H:%M:%S'),
-          'BUY/SELL', format(buy_vol, '.2f'), format(sell_vol, '.2f'),
-          'PRICE', ex_price,
-          local_pos, format(order_profit, '.2f'),
-          'SMPF', format(sum_profit, '.2f'))
+          'BU/SE',
+          format(buy_vol, '.2f'),
+          format(sell_vol, '.2f'),
+          'PRICE',
+          ex_price,
+          local_pos,
+          format(order_profit, '.2f'),
+          format(order_profit_rate, '.4f'),
+          'SMPF',
+          format(sum_profit, '.2f'))
 
 
 
@@ -183,5 +185,6 @@ def main(channels):
 
 
 if __name__ == '__main__':
-    main(['lightning_executions_FX_BTC_JPY'])
+    main(['lightning_executions_FX_BTC_JPY'],
+         )
     pubnub.start()
